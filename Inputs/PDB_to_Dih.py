@@ -2,27 +2,27 @@ from Bio.PDB import *
 import math
 import pandas as pd
 import numpy as np
-from sys import exit
-from Bio import BiopythonWarning
 import warnings
+
+# Constants
+AMINO_ACIDS = ["ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE", "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL"]
+PDBS_LIST_PATH = "PDBs_list.csv"
+NON_OHE_DATASET_PATH = "Non_OHE_dataset.csv"
+PDBS_DIR = "All_pdbs/"
 
 warnings.simplefilter('ignore', BiopythonWarning)
 
-amino_acids = ["ALA","ARG","ASN","ASP","CYS","GLN","GLU","GLY","HIS","ILE","LEU","LYS","MET","PHE","PRO","SER","THR","TRP","TYR","VAL"]
-
-""" Calculates dihedral angles and creates a sliding window from a PDB that does not contain errors."""
-
-def pdbToDih(pdb, chain):
-
+def pdb_to_dih(pdb, chain):
+    """Calculates dihedral angles and creates a sliding window from a PDB that does not contain errors."""
     # Load PDB file
     parser = PDBParser()
-    pdb_file = f'All_pdbs/{pdb}.pdb'
-    myProtein = parser.get_structure(pdb, pdb_file)
-    myChain = myProtein[0][chain]
-    residues = list(myChain.get_residues())
-    residues = [res for res in myChain.get_residues() if res.get_resname() in amino_acids]
+    pdb_file = f"{PDBS_DIR}{pdb}.pdb"
+    my_protein = parser.get_structure(pdb, pdb_file)
+    my_chain = my_protein[0][chain]
+    residues = list(my_chain.get_residues())
+    residues = [res for res in my_chain.get_residues() if res.get_resname() in AMINO_ACIDS]
 
-    for i in range(len(residues)-1):
+    for i in range(len(residues) - 1):
         if residues[i].get_id()[1] + 1 != residues[i+1].get_id()[1]:
             return
 
@@ -47,19 +47,23 @@ def pdbToDih(pdb, chain):
         atom5 = Vector(residues[i+1]['N'].coord)   
 
         # Calculate the dihedral angle using the calc_dihedral function
-        phi = round(math.degrees(calc_dihedral(atom1, atom2, atom3, atom4)),3)
-        psi = round(math.degrees(calc_dihedral(atom2, atom3, atom4, atom5)),3)   
+        phi = round(math.degrees(calc_dihedral(atom1, atom2, atom3, atom4)), 3)
+        psi = round(math.degrees(calc_dihedral(atom2, atom3, atom4, atom5)), 3)   
 
         angle_data.append([pdb, residue.get_resname(), residue.get_id()[1], phi, psi, *window ])
 
     angles = pd.DataFrame(angle_data)
     return angles
 
-df_list = pd.read_csv("PDBs_list.csv", header=0)
+# Read PDBs list from CSV
+df_list = pd.read_csv(PDBS_LIST_PATH, header=0)
 
 def loop(pdb, chain):
     try:
-        pdbToDih(pdb, chain).to_csv('Non_OHE_dataset.csv', index=False, mode="a", header=0)
-    except: pass
+        # Append the angle data to the non OHE dataset CSV
+        pdb_to_dih(pdb, chain).to_csv(NON_OHE_DATASET_PATH, index=False, mode="a", header=0)
+    except:
+        pass
 
-df_list.apply(lambda x: loop(x['PDB'], x['Chain']), axis=1)
+# Loop over the PDBs list and apply the loop function to each row
+df_list.apply(lambda x: loop(x['PDB'],
