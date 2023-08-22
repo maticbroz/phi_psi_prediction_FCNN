@@ -1,60 +1,60 @@
-import os
+import time
 import pandas as pd
+from keras import models, layers, optimizers, backend as K
+from keras.callbacks import EarlyStopping
+import numpy as np
 import tensorflow as tf
-from keras import models, layers, optimizers
-from keras import backend as K
+import optuna
 
-# Constants
-TRAIN_DATA_PATH = "../Inputs/train_data.csv"
-VAL_DATA_PATH = "../Inputs/val_data.csv"
-TEST_DATA_PATH = "../Inputs/test_data.csv"
+# Load datasets
+def load_data(path, skip_cols=5, drop_pattern='EEE', target_cols=(3,5)):
+    data = pd.read_csv(path, delimiter=",")
+    X = data.iloc[:, skip_cols:]
+    X = X.drop(columns=X.filter(regex=drop_pattern).columns)
+    y = data.iloc[:, target_cols[0]:target_cols[1]]
+    return X, y
 
-# Import train and test data
-train = pd.read_csv(TRAIN_DATA_PATH, delimiter=",")
-val = pd.read_csv(VAL_DATA_PATH, delimiter=",")
-test = pd.read_csv(TEST_DATA_PATH, delimiter=",")
-
-# Inputs
-X_train = train.iloc[:, 5:]
-X_val = val.iloc[:, 5:]
-X_test = test.iloc[:, 5:]
-
-# Drop columns that contain "EEE". This way, the "EEE" is represented with a null vector.
-X_train = X_train.drop(columns=X_train.filter(regex='EEE').columns)
-X_val = X_val.drop(columns=X_val.filter(regex='EEE').columns)
-X_test = X_test.drop(columns=X_test.filter(regex='EEE').columns)
-
-# Features. "3" for phi, "4" for psi
-y_train = train.iloc[:,3]
-y_val = val.iloc[:,3]
-y_test = test.iloc[:,3]
-
-num_columns = X_train.shape[1]
+X_train, y_train = load_data("New_dataset/PISCES_train_OHE_2_5.csv")
+X_val, y_val = load_data("New_dataset/PISCES_val_OHE_2_5.csv")
+X_test, y_test = load_data("New_dataset/PISCES_test_OHE_2_5.csv")
 
 def custom_loss(y_true, y_pred):
-    D  = K.abs(y_pred - y_true)
-    error = K.minimum(D, K.abs(360 - D))
-    return error
+    D = K.abs(y_pred - y_true)
+    return K.minimum(D, K.abs(360 - D))
 
-# Model
-model = models.Sequential()
-model.add(layers.Dense(num_columns, input_dim=num_columns))
-model.add(layers.Dense(num_columns, activation="relu"))
-model.add(layers.Dense(num_columns // 2, activation="relu"))
-model.add(layers.Dense(num_columns // 4, activation="relu"))
-model.add(layers.Dense(num_columns // 8, activation="relu"))
-model.add(layers.Dense(num_columns // 16, activation="relu"))
-model.add(layers.Dense(1, activation='linear'))
+def custom_loss_numpy(y_true, y_pred):
+    D = np.abs(y_pred - y_true)
+    return np.minimum(D, np.abs(360 - D))
 
-model.compile(optimizer=optimizers.Adadelta(learning_rate=0.5),
-                loss=custom_loss,
-                )
+def objective(trial):
+    num_columns = X_train.shape[1]
+    model = models.Sequential()
+    model.add(layers.Dense(num_columns, input_dim=num_columns))
 
-callback = tf.keras.callbacks.ReduceLROnPlateau(monitor='loss', patience=2,factor=0.01, mode="auto", min_delta=0.1,cooldown=0,min_lr=10**-15)
-history = model.fit(X_train, y_train,validation_data=(X_val, y_val),epochs=50,batch_size=2**8, callbacks=[callback])
+    num_layers = trial.suggest_int("num_layers", 1, 5)
+    neurons_per_layer = trial.suggest_int("neurons_per_layer", 420 // 16, 420*2)
 
-# Save the model
-model.save("model.h5")
+    for _ in range(num_layers):
+        model.add(layers.Dense(neurons_per_layer, activation="relu"))
 
-# Print the model summary
-model.summary()
+    model.add(layers.Dense(2, activation='linear'))
+    model.compile(optimizer=optimizers.Adadelta(learning_rate=0.5), loss=custom_loss)
+
+    history = model.fit(
+        X_train, y_train,
+        validation_data=(X_val, y_val),
+        epochs=2000, batch_size=2**8,
+        callbacks=[EarlyStopping(monitor='val_loss', patience=4)]
+    )
+
+    y_pred = model.predict(X_test)
+    test_loss_phi = round(np.mean(custom_loss_numpy(y_test.iloc[:, 0].to_numpy(), y_pred[:, 0])), 5)
+    test_loss_psi = round(np.mean(custom_loss_numpy(y_test.iloc[:, 1].to_numpy(), y_pred[:, 1])), 5)
+
+    return test_loss_phi + test_loss_psi
+
+study = optuna.create_study(direction="minimize")
+study.optimize(objective, n_trials=30)
+
+print("Best Hyperparameters: ", study.best_params)
+print("Best Loss: ", study.best_value)
